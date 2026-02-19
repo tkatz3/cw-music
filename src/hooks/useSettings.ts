@@ -7,31 +7,46 @@ export interface Settings {
   volume: number;
   is_paused: boolean;
   pin: string;
+  follow_schedule: boolean;
+  // When follow_schedule is OFF, this station plays instead of whatever the schedule says.
+  // null = no override (falls through to schedule / default station).
+  manual_station_override: string | null;
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  default_station: 'groovesalad',
+  default_station: '',
   volume: 70,
   is_paused: false,
   pin: '1315',
+  follow_schedule: false,
+  manual_station_override: null,
 };
 
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const settingsRef = ref(db, 'settings');
-    const unsubscribe = onValue(settingsRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        setSettings({ ...DEFAULT_SETTINGS, ...data });
-      } else {
-        // Seed defaults if nothing exists
-        set(settingsRef, DEFAULT_SETTINGS);
+    const unsubscribe = onValue(
+      settingsRef,
+      (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+          setSettings({ ...DEFAULT_SETTINGS, ...data });
+        } else {
+          set(settingsRef, DEFAULT_SETTINGS);
+        }
+        setError(null);
+        setLoading(false);
+      },
+      (err) => {
+        console.error('Firebase settings error:', err);
+        setError(err.message);
+        setLoading(false);
       }
-      setLoading(false);
-    });
+    );
     return () => unsubscribe();
   }, []);
 
@@ -39,5 +54,5 @@ export function useSettings() {
     await set(ref(db, `settings/${key}`), value);
   }
 
-  return { settings, loading, updateSetting };
+  return { settings, loading, error, updateSetting };
 }

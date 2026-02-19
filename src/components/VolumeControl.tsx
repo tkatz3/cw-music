@@ -4,10 +4,14 @@ interface VolumeControlProps {
 }
 
 export function VolumeControl({ volume, onChange }: VolumeControlProps) {
+  const icon = volume === 0 ? '○' : volume < 40 ? '◔' : volume < 75 ? '◑' : '●';
+
   return (
     <div className="flex items-center gap-3">
-      <span className="text-gray-400 text-sm">
-        {volume === 0 ? '🔇' : volume < 50 ? '🔉' : '🔊'}
+      <span
+        style={{ color: '#534840', fontSize: '0.7rem', fontFamily: 'var(--font-mono)', width: '10px' }}
+      >
+        {icon}
       </span>
       <input
         type="range"
@@ -15,9 +19,14 @@ export function VolumeControl({ volume, onChange }: VolumeControlProps) {
         max={100}
         value={volume}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-32 accent-amber-400 cursor-pointer"
+        className="w-32 cursor-pointer"
+        style={{ accentColor: '#E4A530' }}
       />
-      <span className="text-gray-400 text-xs font-mono w-8">{volume}%</span>
+      <span
+        style={{ color: '#534840', fontSize: '0.65rem', fontFamily: 'var(--font-mono)', width: '28px' }}
+      >
+        {volume}%
+      </span>
     </div>
   );
 }

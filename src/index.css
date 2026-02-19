@@ -1,25 +1,45 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --color-app-bg: #0f0f1a;
-  --font-mono: 'Space Mono', monospace;
-  --font-sans: 'Inter', sans-serif;
+  /* Warm espresso dark palette */
+  --color-app-bg:      #17110C;
+  --color-surface:     #1F1710;
+  --color-card:        #271E14;
+  --color-card-hover:  #2F2519;
+  --color-card-active: #382D20;
+  --color-border:      #2E2317;
+  --color-border-soft: #3A2F20;
+
+  /* Text */
+  --color-cream:       #F0E6D3;
+  --color-muted:       #8A7D6B;
+  --color-dim:         #534840;
+
+  /* Accent */
+  --color-amber:       #E4A530;
+  --color-amber-light: #F0BC6A;
+  --color-amber-dim:   #7A5A18;
+
+  /* Status */
+  --color-live:        #6BCF7F;
+  --color-live-dim:    #2D6B3A;
+
+  /* Typography */
+  --font-display: 'Lora', Georgia, serif;
+  --font-mono:    'DM Mono', 'Courier New', monospace;
+  --font-sans:    'DM Mono', monospace;
 }
 
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
-  background-color: #0f0f1a;
-  color: #e5e7eb;
-  font-family: 'Inter', sans-serif;
+  background-color: #17110C;
+  color: #F0E6D3;
+  font-family: 'DM Mono', monospace;
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
-  /* Subtle noise texture */
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
 #root {
@@ -28,7 +48,6 @@ body {
   flex-direction: column;
 }
 
-/* Reset button defaults */
 button {
   cursor: pointer;
   border: none;
@@ -36,35 +55,42 @@ button {
   font-family: inherit;
 }
 
-a {
-  text-decoration: none;
-  color: inherit;
-}
+a { text-decoration: none; color: inherit; }
 
-/* Audio visualizer animation */
+/* ── Scrollbar ── */
+::-webkit-scrollbar       { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3A2F20; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #4A3F30; }
+
+/* ── Animations ── */
 @keyframes equalizer {
-  0% { transform: scaleY(0.3); }
+  0%   { transform: scaleY(0.25); }
   100% { transform: scaleY(1); }
 }
 
-/* Pulse glow for now playing indicator */
-@keyframes pulse-glow {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.85); }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-::-webkit-scrollbar-track {
-  background: transparent;
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-::-webkit-scrollbar-thumb {
-  background: #374151;
-  border-radius: 2px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #4b5563;
+
+.animate-fade-in  { animation: fade-in 0.2s ease forwards; }
+.animate-slide-up { animation: slide-up 0.25s ease forwards; }
+
+/* ── Drag cursor ── */
+[data-dragging="true"] { cursor: grabbing !important; }
+
+/* ── Station color dot pulse ── */
+.dot-live {
+  animation: pulse-dot 2s ease-in-out infinite;
 }

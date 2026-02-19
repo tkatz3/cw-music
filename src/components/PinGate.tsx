@@ -4,7 +4,7 @@ const LOCKOUT_KEY = 'pin_failed_attempts';
 const LOCKOUT_TIME_KEY = 'pin_lockout_until';
 const AUTH_KEY = 'pin_authenticated';
 const MAX_ATTEMPTS = 15;
-const LOCKOUT_DURATION_MS = 60 * 60 * 1000; // 1 hour
+const LOCKOUT_DURATION_MS = 60 * 60 * 1000;
 
 interface PinGateProps {
   correctPin: string;
@@ -16,7 +16,12 @@ export function PinGate({ correctPin, onAuthenticated }: PinGateProps) {
   const [error, setError] = useState('');
   const [lockedOut, setLockedOut] = useState(false);
   const [countdown, setCountdown] = useState('');
-  const inputRefs = [useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null)];
+  const inputRefs = [
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+  ];
 
   useEffect(() => {
     checkLockout();
@@ -44,9 +49,7 @@ export function PinGate({ correctPin, onAuthenticated }: PinGateProps) {
 
   function checkLockout() {
     const until = parseInt(localStorage.getItem(LOCKOUT_TIME_KEY) || '0');
-    if (until > Date.now()) {
-      setLockedOut(true);
-    }
+    if (until > Date.now()) setLockedOut(true);
   }
 
   function handleDigit(index: number, value: string) {
@@ -55,15 +58,8 @@ export function PinGate({ correctPin, onAuthenticated }: PinGateProps) {
     next[index] = value;
     setDigits(next);
     setError('');
-
-    if (value && index < 3) {
-      inputRefs[index + 1].current?.focus();
-    }
-
-    if (value && index === 3) {
-      const pin = next.join('');
-      if (pin.length === 4) submit(pin);
-    }
+    if (value && index < 3) inputRefs[index + 1].current?.focus();
+    if (value && index === 3 && next.join('').length === 4) submit(next.join(''));
   }
 
   function handleKeyDown(index: number, e: React.KeyboardEvent<HTMLInputElement>) {
@@ -86,7 +82,7 @@ export function PinGate({ correctPin, onAuthenticated }: PinGateProps) {
         localStorage.setItem(LOCKOUT_TIME_KEY, String(until));
         setLockedOut(true);
       } else {
-        setError(`Incorrect PIN. ${MAX_ATTEMPTS - attempts} attempts remaining.`);
+        setError(`Wrong PIN · ${MAX_ATTEMPTS - attempts} attempts left`);
         setDigits(['', '', '', '']);
         setTimeout(() => inputRefs[0].current?.focus(), 50);
       }
@@ -95,27 +91,56 @@ export function PinGate({ correctPin, onAuthenticated }: PinGateProps) {
 
   if (lockedOut) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-app-bg">
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ backgroundColor: '#17110C' }}
+      >
         <div className="text-center space-y-4">
-          <div className="text-6xl mb-6">🔒</div>
-          <h2 className="text-2xl font-mono font-bold text-amber-400">Too Many Attempts</h2>
-          <p className="text-gray-400">Try again in</p>
-          <p className="text-4xl font-mono text-amber-400">{countdown}</p>
+          <p style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '2rem' }}>🔒</p>
+          <p style={{ fontFamily: 'var(--font-display)', color: '#F0E6D3', fontSize: '1.1rem', fontWeight: 600 }}>
+            Too many attempts
+          </p>
+          <p style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+            Try again in
+          </p>
+          <p style={{ fontFamily: 'var(--font-display)', color: '#E4A530', fontSize: '2.5rem', fontWeight: 600 }}>
+            {countdown}
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-app-bg">
-      <div className="text-center space-y-8 p-8">
+    <div
+      className="min-h-screen flex items-center justify-center p-6"
+      style={{ backgroundColor: '#17110C' }}
+    >
+      <div className="text-center space-y-10">
         <div>
-          <h1 className="text-3xl font-mono font-bold text-amber-400 tracking-wider">CULTURE WORKS</h1>
-          <p className="text-gray-400 mt-2 text-sm tracking-widest uppercase">Music Scheduler</p>
+          <h1
+            style={{
+              fontFamily: 'var(--font-display)',
+              color: '#E4A530',
+              fontSize: '1.8rem',
+              fontWeight: 700,
+              letterSpacing: '-0.01em',
+            }}
+          >
+            Culture Works
+          </h1>
+          <p
+            className="mt-2 tracking-widest uppercase"
+            style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}
+          >
+            Music Scheduler
+          </p>
         </div>
 
-        <div className="space-y-3">
-          <p className="text-gray-300 text-sm tracking-wide">Enter PIN to manage the schedule</p>
+        <div className="space-y-4">
+          <p style={{ color: '#8A7D6B', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+            Enter PIN
+          </p>
           <div className="flex gap-3 justify-center">
             {digits.map((digit, i) => (
               <input
@@ -127,11 +152,26 @@ export function PinGate({ correctPin, onAuthenticated }: PinGateProps) {
                 value={digit}
                 onChange={(e) => handleDigit(i, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(i, e)}
-                className="w-14 h-16 text-center text-2xl font-mono bg-gray-800 border-2 border-gray-600 rounded-lg text-white focus:border-amber-400 focus:outline-none transition-colors"
+                className="text-center rounded-xl text-xl"
+                style={{
+                  width: '52px', height: '60px',
+                  backgroundColor: '#1F1710',
+                  border: error ? '1.5px solid #E0575755' : '1.5px solid #2E2317',
+                  color: '#F0E6D3',
+                  fontFamily: 'var(--font-display)',
+                  outline: 'none',
+                  transition: 'border-color 0.15s',
+                }}
+                onFocus={(e) => { e.target.style.borderColor = '#E4A530'; }}
+                onBlur={(e) => { e.target.style.borderColor = error ? '#E0575755' : '#2E2317'; }}
               />
             ))}
           </div>
-          {error && <p className="text-red-400 text-sm">{error}</p>}
+          {error && (
+            <p style={{ color: '#E05757', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+              {error}
+            </p>
+          )}
         </div>
       </div>
     </div>

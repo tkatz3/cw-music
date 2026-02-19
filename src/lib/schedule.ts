@@ -1,4 +1,3 @@
-import { STATIONS } from './stations';
 import type { Station } from './stations';
 
 export interface ScheduleBlock {
@@ -13,8 +12,9 @@ export interface ScheduleBlock {
 
 export function getCurrentStation(
   scheduleBlocks: ScheduleBlock[],
+  stations: Station[],
   defaultStationId: string
-): Station {
+): Station | null {
   const now = new Date();
   const dayOfWeek = (now.getDay() + 6) % 7; // Convert JS Sunday=0 to Monday=0
   const currentHour = now.getHours();
@@ -30,13 +30,14 @@ export function getCurrentStation(
   );
 
   if (currentBlock) {
-    return STATIONS.find((s) => s.id === currentBlock.station_id) || STATIONS[0];
+    return stations.find((s) => s.id === currentBlock.station_id) ?? stations.find((s) => s.id === defaultStationId) ?? stations[0] ?? null;
   }
-  return STATIONS.find((s) => s.id === defaultStationId) || STATIONS[0];
+  return stations.find((s) => s.id === defaultStationId) ?? stations[0] ?? null;
 }
 
 export function getNextStation(
   scheduleBlocks: ScheduleBlock[],
+  stations: Station[],
   _defaultStationId: string
 ): { station: Station; label: string } | null {
   const now = new Date();
@@ -65,7 +66,7 @@ export function getNextStation(
   if (upcoming.length === 0) return null;
 
   const next = upcoming[0];
-  const station = STATIONS.find((s) => s.id === next.station_id);
+  const station = stations.find((s) => s.id === next.station_id);
   if (!station) return null;
 
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -79,4 +80,5 @@ export function getNextStation(
 export const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 export const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export const START_HOUR = 6;
-export const END_HOUR = 22; // exclusive — grid shows 6 AM through 9 PM (last slot starts at 21)
+export const END_HOUR = 22;        // default visible range: 6am–9pm
+export const LATE_END_HOUR = 27;   // late-hours range adds 10pm–2am (hours 22–26, where 24+ wraps to next day)
