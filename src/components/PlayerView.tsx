@@ -2,10 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import { useSchedule } from '../hooks/useSchedule';
 import { useSettings } from '../hooks/useSettings';
 import { useStations } from '../hooks/useStations';
+import { useSpotifyPlaylists } from '../hooks/useSpotifyPlaylists';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
-import { getCurrentStation, getNextStation } from '../lib/schedule';
+import { useSpotifyPlayer } from '../hooks/useSpotifyPlayer';
+import { getCurrentPlayback, getNextStation } from '../lib/schedule';
+import type { ScheduleBlock } from '../lib/schedule';
 import { AudioVisualizer } from './AudioVisualizer';
 import { VolumeControl } from './VolumeControl';
+
+const SPOTIFY_GREEN = '#1DB954';
 
 function formatTime(date: Date) {
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
@@ -14,49 +19,58 @@ function formatDate(date: Date) {
   return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
+function isInBlock(blocks: ScheduleBlock[], atTime: Date): boolean {
+  const day = (atTime.getDay() + 6) % 7;
+  const h = atTime.getHours();
+  const m = atTime.getMinutes();
+  return blocks.some(
+    (b) =>
+      b.day_of_week === day &&
+      (b.start_hour < h || (b.start_hour === h && b.start_minute <= m)) &&
+      (b.end_hour > h || (b.end_hour === h && b.end_minute > m))
+  );
+}
+
 export function PlayerView() {
   const { blocks } = useSchedule();
   const { settings, updateSetting } = useSettings();
   const { stations } = useStations();
+  const { playlists: spotifyPlaylists } = useSpotifyPlaylists();
   const audio = useAudioPlayer();
 
+  const [started, setStarted] = useState(false);
   const [now, setNow] = useState(new Date());
   const [cursorVisible, setCursorVisible] = useState(true);
   const cursorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
-  // Track previous "in-block" state so we only write to Firebase on transitions
   const prevInBlock = useRef<boolean | null>(null);
-  // Track previous minute so follow-schedule only evaluates at minute boundaries
   const prevMinute = useRef<number>(-1);
 
-  // Resolve effective station: manual override (when not following schedule) or scheduled
-  const scheduledStation = getCurrentStation(blocks, stations, settings.default_station);
-  const manualStation = !settings.follow_schedule && settings.manual_station_override
-    ? stations.find((s) => s.id === settings.manual_station_override) ?? null
-    : null;
-  const currentStation = manualStation ?? scheduledStation;
+  // Spotify player: enabled once user has clicked start and Spotify is configured
+  const hasSpotifyToken = !!settings.spotify_refresh_token && !!settings.spotify_connected;
+  const spotifyPlayer = useSpotifyPlayer(started && hasSpotifyToken);
+
+  // Resolve current playback source
+  const currentPlayback = getCurrentPlayback(
+    blocks, stations, spotifyPlaylists,
+    settings.default_station, settings.default_type
+  );
+
+  const isSpotifySource = currentPlayback?.type === 'spotify';
+  const currentStation = currentPlayback?.type === 'somafm' ? currentPlayback.station : null;
+  const currentSpotifyUri = currentPlayback?.type === 'spotify' ? currentPlayback.uri : null;
+  const accentColor = isSpotifySource ? SPOTIFY_GREEN : (currentStation?.color ?? '#E4A530');
+
   const nextInfo = getNextStation(blocks, stations, settings.default_station);
 
-  // Helper: is there a scheduled block active right now?
-  function isInScheduledBlock(atTime: Date): boolean {
-    const day = (atTime.getDay() + 6) % 7;
-    const h = atTime.getHours();
-    const m = atTime.getMinutes();
-    return blocks.some(
-      (b) =>
-        b.day_of_week === day &&
-        (b.start_hour < h || (b.start_hour === h && b.start_minute <= m)) &&
-        (b.end_hour > h || (b.end_hour === h && b.end_minute > m))
-    );
-  }
-
+  // Clock tick
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Follow-schedule: auto-play/pause at block boundaries (checked once per minute)
+  // Follow-schedule: auto-play/pause at block boundaries (once per minute)
   useEffect(() => {
     if (!settings.follow_schedule) {
       prevInBlock.current = null;
@@ -65,14 +79,12 @@ export function PlayerView() {
     }
 
     const minute = now.getHours() * 60 + now.getMinutes();
-    // Bypass minute check on first evaluation (prevInBlock === null); otherwise only act on minute change
     if (minute === prevMinute.current && prevInBlock.current !== null) return;
     prevMinute.current = minute;
 
-    const inBlock = isInScheduledBlock(now);
+    const inBlock = isInBlock(blocks, now);
 
     if (prevInBlock.current === null) {
-      // First evaluation after follow_schedule turned on — apply immediately
       prevInBlock.current = inBlock;
       if (inBlock && settings.is_paused) updateSetting('is_paused', false);
       else if (!inBlock && !settings.is_paused) updateSetting('is_paused', true);
@@ -81,36 +93,68 @@ export function PlayerView() {
 
     if (inBlock !== prevInBlock.current) {
       prevInBlock.current = inBlock;
-      // Entered a block → auto-resume; left a block → auto-pause
       updateSetting('is_paused', !inBlock);
     }
   }, [now, settings.follow_schedule, blocks]);
 
-  // Auto-start: when follow_schedule wants to play but audio hasn't been started yet
-  // (e.g. Pi rebooted mid-block, or page refreshed while a block is active)
+  // Auto-start SomaFM if follow_schedule and a SomaFM block is active
   useEffect(() => {
     if (!settings.follow_schedule || audio.started || !currentStation) return;
-    if (!settings.is_paused && isInScheduledBlock(new Date())) {
+    if (!settings.is_paused && isInBlock(blocks, new Date())) {
       audio.start(currentStation.stream_url, settings.volume);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.follow_schedule, settings.is_paused, audio.started, currentStation?.id, blocks]);
 
-  // Stream switch: only fires when station ID actually changes
+  // Source switching: runs when playback type or identity changes
   useEffect(() => {
-    if (!audio.started || !currentStation) return;
-    if (audio.currentUrl !== currentStation.stream_url) {
-      audio.switchStream(currentStation.stream_url);
+    if (!started) return;
+
+    if (isSpotifySource) {
+      // Mute SomaFM
+      if (audio.started) audio.setPaused(true);
+      // Spotify playback triggered by spotifyPlayer.state.isReady effect
+    } else if (currentStation) {
+      // Pause Spotify
+      if (spotifyPlayer.state.isReady) {
+        spotifyPlayer.pause().catch(console.error);
+      }
+      // Resume/switch SomaFM
+      if (audio.started) {
+        if (audio.currentUrl !== currentStation.stream_url) {
+          audio.switchStream(currentStation.stream_url);
+        }
+        audio.setPaused(settings.is_paused);
+      }
     }
-  }, [currentStation?.id]);
+  }, [started, isSpotifySource, currentStation?.id, currentSpotifyUri]);
 
-  useEffect(() => { audio.setVolume(settings.volume); }, [settings.volume]);
-
+  // When Spotify player becomes ready, start playing if not paused
   useEffect(() => {
-    if (!audio.started) return;
-    audio.setPaused(settings.is_paused);
-  }, [settings.is_paused, audio.started]);
+    if (!spotifyPlayer.state.isReady || !started || settings.is_paused) return;
+    if (currentPlayback?.type === 'spotify') {
+      spotifyPlayer.playPlaylist(currentPlayback.uri).catch(console.error);
+    }
+  }, [spotifyPlayer.state.isReady]);
 
+  // Sync volume
+  useEffect(() => {
+    audio.setVolume(settings.volume);
+    spotifyPlayer.setVolume(settings.volume);
+  }, [settings.volume]);
+
+  // Sync pause state
+  useEffect(() => {
+    if (!audio.started && !started) return;
+
+    if (isSpotifySource && spotifyPlayer.state.isReady) {
+      if (settings.is_paused) spotifyPlayer.pause().catch(console.error);
+      else spotifyPlayer.resume().catch(console.error);
+    } else if (!isSpotifySource && audio.started) {
+      audio.setPaused(settings.is_paused);
+    }
+  }, [settings.is_paused, audio.started, started, isSpotifySource]);
+
+  // Wake lock
   useEffect(() => {
     async function requestWakeLock() {
       if ('wakeLock' in navigator) {
@@ -126,6 +170,7 @@ export function PlayerView() {
     };
   }, []);
 
+  // Auto-hide cursor
   useEffect(() => {
     function onMove() {
       setCursorVisible(true);
@@ -137,22 +182,31 @@ export function PlayerView() {
   }, []);
 
   function handleStart() {
-    if (!currentStation) return;
-    audio.start(currentStation.stream_url, settings.volume);
+    setStarted(true);
+    if (!isSpotifySource && currentStation) {
+      audio.start(currentStation.stream_url, settings.volume);
+    }
+    // Spotify SDK initializes via useSpotifyPlayer once started=true
   }
 
   async function handleTogglePause() {
     const next = !settings.is_paused;
-    audio.setPaused(next);
+    if (isSpotifySource && spotifyPlayer.state.isReady) {
+      if (next) await spotifyPlayer.pause();
+      else await spotifyPlayer.resume();
+    } else {
+      audio.setPaused(next);
+    }
     await updateSetting('is_paused', next);
   }
 
   async function handleVolumeChange(v: number) {
     audio.setVolume(v);
+    spotifyPlayer.setVolume(v);
     await updateSetting('volume', v);
   }
 
-  const accentColor = currentStation?.color ?? '#E4A530';
+  const notStarted = isSpotifySource ? !started : !audio.started;
 
   return (
     <div
@@ -162,7 +216,7 @@ export function PlayerView() {
         cursor: cursorVisible ? 'default' : 'none',
       }}
     >
-      {/* Warm background glow */}
+      {/* Background glow */}
       <div
         className="absolute inset-0 pointer-events-none transition-all duration-2000"
         style={{
@@ -170,7 +224,7 @@ export function PlayerView() {
         }}
       />
 
-      {/* Subtle grain */}
+      {/* Grain overlay */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.02]"
         style={{
@@ -178,8 +232,8 @@ export function PlayerView() {
         }}
       />
 
-      {!currentStation ? (
-        /* No stations */
+      {!currentPlayback ? (
+        /* No stations/playlists configured */
         <div className="space-y-4 relative z-10 animate-fade-in">
           <h1 style={{ fontFamily: 'var(--font-display)', color: '#E4A530', fontSize: '2rem', fontWeight: 700 }}>
             Culture Works
@@ -187,15 +241,12 @@ export function PlayerView() {
           <p style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>
             No stations configured.
           </p>
-          <a
-            href="/"
-            style={{ color: '#E4A530', fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
-          >
+          <a href="/" style={{ color: '#E4A530', fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>
             Open the scheduler →
           </a>
         </div>
 
-      ) : !audio.started ? (
+      ) : notStarted ? (
         /* Start screen */
         <div className="space-y-10 relative z-10 animate-fade-in">
           <div>
@@ -219,34 +270,55 @@ export function PlayerView() {
             </p>
           </div>
 
-          {/* Current station preview */}
           <div className="space-y-1">
             <p style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
               Now scheduled
             </p>
-            <p style={{ fontFamily: 'var(--font-display)', color: accentColor, fontSize: '1.3rem', fontWeight: 600 }}>
-              {currentStation.name}
-            </p>
+            {isSpotifySource ? (
+              <>
+                <p style={{ fontFamily: 'var(--font-display)', color: SPOTIFY_GREEN, fontSize: '1.3rem', fontWeight: 600 }}>
+                  {(currentPlayback as { name: string }).name}
+                </p>
+                <p style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>via Spotify</p>
+              </>
+            ) : (
+              <p style={{ fontFamily: 'var(--font-display)', color: accentColor, fontSize: '1.3rem', fontWeight: 600 }}>
+                {currentStation!.name}
+              </p>
+            )}
           </div>
 
-          <button
-            onClick={handleStart}
-            className="transition-all hover:scale-105 active:scale-95 px-10 py-4 rounded-2xl"
-            style={{
-              backgroundColor: accentColor,
-              color: '#17110C',
-              fontFamily: 'var(--font-mono)',
-              fontWeight: 500,
-              fontSize: '1rem',
-              letterSpacing: '0.05em',
-              boxShadow: `0 0 40px ${accentColor}44`,
-            }}
-          >
-            ▶ start
-          </button>
-          <p style={{ color: '#3A2F20', fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>
-            tap to enable audio
-          </p>
+          {isSpotifySource && !hasSpotifyToken ? (
+            <div className="space-y-3">
+              <p style={{ color: '#E05757', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                Spotify not connected
+              </p>
+              <a href="/" style={{ color: '#E4A530', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                Connect in Settings →
+              </a>
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={handleStart}
+                className="transition-all hover:scale-105 active:scale-95 px-10 py-4 rounded-2xl"
+                style={{
+                  backgroundColor: accentColor,
+                  color: isSpotifySource ? '#000' : '#17110C',
+                  fontFamily: 'var(--font-mono)',
+                  fontWeight: 500,
+                  fontSize: '1rem',
+                  letterSpacing: '0.05em',
+                  boxShadow: `0 0 40px ${accentColor}44`,
+                }}
+              >
+                ▶ start
+              </button>
+              <p style={{ color: '#3A2F20', fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>
+                tap to enable audio
+              </p>
+            </>
+          )}
         </div>
 
       ) : (
@@ -266,26 +338,32 @@ export function PlayerView() {
             >
               {formatTime(now)}
             </p>
-            <p
-              className="mt-2"
-              style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.7rem' }}
-            >
+            <p className="mt-2" style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.7rem' }}>
               {formatDate(now)}
             </p>
           </div>
 
-          {/* Visualizer + station */}
+          {/* Visualizer + info */}
           <div className="space-y-5">
-            <div
-              className="w-20 h-20 rounded-full mx-auto flex items-center justify-center"
-              style={{
-                backgroundColor: `${accentColor}12`,
-                border: `1.5px solid ${accentColor}44`,
-                boxShadow: `0 0 40px ${accentColor}22`,
-              }}
-            >
-              <AudioVisualizer active={!settings.is_paused} color={accentColor} size="lg" />
-            </div>
+            {isSpotifySource && spotifyPlayer.state.currentTrack?.albumArt ? (
+              <img
+                src={spotifyPlayer.state.currentTrack.albumArt}
+                alt=""
+                className="w-20 h-20 rounded-lg mx-auto object-cover"
+                style={{ boxShadow: `0 0 40px ${SPOTIFY_GREEN}33`, border: `1px solid ${SPOTIFY_GREEN}44` }}
+              />
+            ) : (
+              <div
+                className="w-20 h-20 rounded-full mx-auto flex items-center justify-center"
+                style={{
+                  backgroundColor: `${accentColor}12`,
+                  border: `1.5px solid ${accentColor}44`,
+                  boxShadow: `0 0 40px ${accentColor}22`,
+                }}
+              >
+                <AudioVisualizer active={!settings.is_paused} color={accentColor} size="lg" />
+              </div>
+            )}
 
             <div>
               <div className="flex items-center justify-center gap-2 mb-2">
@@ -305,24 +383,54 @@ export function PlayerView() {
                 </span>
               </div>
 
-              <h2
-                style={{
-                  fontFamily: 'var(--font-display)',
-                  fontSize: '1.8rem',
-                  fontWeight: 600,
-                  color: accentColor,
-                  lineHeight: 1.2,
-                }}
-              >
-                {currentStation.name}
-              </h2>
-              {currentStation.description && (
-                <p
-                  className="mt-2 max-w-xs mx-auto leading-relaxed"
-                  style={{ color: '#8A7D6B', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}
-                >
-                  {currentStation.description}
-                </p>
+              {isSpotifySource ? (
+                /* Spotify now playing */
+                <div>
+                  <h2
+                    style={{
+                      fontFamily: 'var(--font-display)',
+                      fontSize: '1.6rem',
+                      fontWeight: 600,
+                      color: SPOTIFY_GREEN,
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    {spotifyPlayer.state.currentTrack?.name ?? (currentPlayback as { name: string }).name}
+                  </h2>
+                  {spotifyPlayer.state.currentTrack?.artist && (
+                    <p className="mt-1.5 max-w-xs mx-auto leading-relaxed" style={{ color: '#8A7D6B', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+                      {spotifyPlayer.state.currentTrack.artist}
+                    </p>
+                  )}
+                  <p className="mt-2" style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>
+                    from {(currentPlayback as { name: string }).name}
+                  </p>
+                  {spotifyPlayer.state.error && (
+                    <p className="mt-2" style={{ color: '#E05757', fontFamily: 'var(--font-mono)', fontSize: '0.7rem' }}>
+                      {spotifyPlayer.state.error}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                /* SomaFM now playing */
+                <div>
+                  <h2
+                    style={{
+                      fontFamily: 'var(--font-display)',
+                      fontSize: '1.8rem',
+                      fontWeight: 600,
+                      color: accentColor,
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    {currentStation!.name}
+                  </h2>
+                  {currentStation!.description && (
+                    <p className="mt-2 max-w-xs mx-auto leading-relaxed" style={{ color: '#8A7D6B', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+                      {currentStation!.description}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -344,12 +452,9 @@ export function PlayerView() {
             <VolumeControl volume={settings.volume} onChange={handleVolumeChange} />
           </div>
 
-          {/* Up next */}
-          {nextInfo && (
-            <div
-              className="pt-5"
-              style={{ borderTop: '1px solid #2E2317' }}
-            >
+          {/* Up next (SomaFM only) */}
+          {nextInfo && !isSpotifySource && (
+            <div className="pt-5" style={{ borderTop: '1px solid #2E2317' }}>
               <p className="text-[10px] uppercase tracking-widest mb-1" style={{ color: '#3A2F20', fontFamily: 'var(--font-mono)' }}>
                 Up next
               </p>

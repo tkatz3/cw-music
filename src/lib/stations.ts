@@ -13,6 +13,14 @@ export interface Playlist {
   color: string;
 }
 
+export interface SpotifyPlaylistRecord {
+  id: string;
+  name: string;
+  uri: string;
+  image_url: string;
+  track_count: number;
+}
+
 // Vivid colors that read well on a warm dark background
 const COLORS = [
   '#E4A530', '#7B8CDE', '#6BCF7F', '#E87D3E', '#AB69D1',

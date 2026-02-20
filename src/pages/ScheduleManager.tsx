@@ -17,20 +17,24 @@ import { useSchedule } from '../hooks/useSchedule';
 import { useSettings } from '../hooks/useSettings';
 import { useStations } from '../hooks/useStations';
 import { usePlaylists } from '../hooks/usePlaylists';
+import { useSpotifyPlaylists } from '../hooks/useSpotifyPlaylists';
 import { getCurrentStation } from '../lib/schedule';
+
+const SPOTIFY_GREEN = '#1DB954';
 
 export function ScheduleManager() {
   const [authenticated, setAuthenticated] = useState(checkPinAuth());
   const [showSettings, setShowSettings] = useState(false);
 
   // Data hooks
-  const { blocks, loading: schedLoading, error: schedError, assignStation, assignPlaylist } = useSchedule();
+  const { blocks, loading: schedLoading, error: schedError, assignStation, assignPlaylist, assignSpotifyPlaylist } = useSchedule();
   const { settings, loading: settingsLoading, error: settingsError, updateSetting } = useSettings();
   const { stations, loading: stationsLoading, addStation, removeStation } = useStations();
   const { playlists, createPlaylist, updatePlaylist, deletePlaylist } = usePlaylists();
+  const { playlists: spotifyPlaylists, addPlaylist: addSpotifyPlaylist, removePlaylist: removeSpotifyPlaylist } = useSpotifyPlaylists();
 
   // DnD — lifted here so it wraps both sidebar AND grid
-  const [activeDragType, setActiveDragType] = useState<'station' | 'playlist' | null>(null);
+  const [activeDragType, setActiveDragType] = useState<'station' | 'playlist' | 'spotify-playlist' | null>(null);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -46,6 +50,9 @@ export function ScheduleManager() {
     } else if (id.startsWith('playlist-')) {
       setActiveDragType('playlist');
       setActiveDragId(event.active.data.current?.playlistId ?? null);
+    } else if (id.startsWith('spotify-')) {
+      setActiveDragType('spotify-playlist');
+      setActiveDragId(event.active.data.current?.spotifyPlaylistId ?? null);
     }
   }
 
@@ -64,10 +71,14 @@ export function ScheduleManager() {
       const playlistId = event.active.data.current?.playlistId as string;
       const playlist = playlists.find((p) => p.id === playlistId);
       if (playlist) assignPlaylist(slotData.day, slotData.hour, playlist);
+    } else if (id.startsWith('spotify-')) {
+      const spotifyPlaylistId = event.active.data.current?.spotifyPlaylistId as string;
+      const spotifyPlaylist = spotifyPlaylists.find((p) => p.id === spotifyPlaylistId);
+      if (spotifyPlaylist) assignSpotifyPlaylist(slotData.day, slotData.hour, spotifyPlaylist.uri, spotifyPlaylist.name);
     }
   }
 
-  // Resolve what's actually playing: manual override takes priority when not following schedule
+  // Resolve what's actually playing for MiniPlayer display
   const scheduledStation = getCurrentStation(blocks, stations, settings.default_station);
   const manualStation = !settings.follow_schedule && settings.manual_station_override
     ? stations.find((s) => s.id === settings.manual_station_override) ?? null
@@ -80,6 +91,7 @@ export function ScheduleManager() {
   // Drag overlay data
   const dragStation = activeDragType === 'station' ? stations.find((s) => s.id === activeDragId) : null;
   const dragPlaylist = activeDragType === 'playlist' ? playlists.find((p) => p.id === activeDragId) : null;
+  const dragSpotifyPlaylist = activeDragType === 'spotify-playlist' ? spotifyPlaylists.find((p) => p.id === activeDragId) : null;
 
   if (!authenticated) {
     return (
@@ -165,7 +177,7 @@ export function ScheduleManager() {
 
         {/* ── Main ── */}
         <div className="flex flex-1 overflow-hidden gap-0">
-          {/* Station sidebar — desktop only */}
+          {/* Sidebar — desktop only */}
           <aside
             className="hidden md:flex flex-col p-4 flex-shrink-0 overflow-hidden"
             style={{ width: '220px', borderRight: '1px solid #2E2317' }}
@@ -173,11 +185,15 @@ export function ScheduleManager() {
             <StationSidebar
               stations={stations}
               playlists={playlists}
+              spotifyPlaylists={spotifyPlaylists}
+              spotifyConnected={settings.spotify_connected && !!settings.spotify_refresh_token}
               onAddStation={addStation}
               onRemoveStation={removeStation}
               onCreatePlaylist={createPlaylist}
               onUpdatePlaylist={(id, updates) => updatePlaylist(id, updates)}
               onDeletePlaylist={deletePlaylist}
+              onAddSpotifyPlaylist={addSpotifyPlaylist}
+              onRemoveSpotifyPlaylist={removeSpotifyPlaylist}
             />
           </aside>
 
@@ -185,10 +201,7 @@ export function ScheduleManager() {
           <main className="flex-1 overflow-hidden flex flex-col">
             {isLoading ? (
               <div className="flex items-center justify-center flex-1">
-                <p
-                  className="text-sm animate-pulse"
-                  style={{ color: '#534840', fontFamily: 'var(--font-mono)' }}
-                >
+                <p className="text-sm animate-pulse" style={{ color: '#534840', fontFamily: 'var(--font-mono)' }}>
                   Loading…
                 </p>
               </div>
@@ -201,28 +214,26 @@ export function ScheduleManager() {
                   {error}
                 </p>
               </div>
-            ) : stations.length === 0 ? (
+            ) : stations.length === 0 && spotifyPlaylists.length === 0 ? (
               <div className="flex flex-col items-center justify-center flex-1 gap-4 px-6 text-center">
                 <div>
-                  <p
-                    style={{ fontFamily: 'var(--font-display)', color: '#F0E6D3', fontSize: '1.1rem', fontWeight: 600 }}
-                  >
+                  <p style={{ fontFamily: 'var(--font-display)', color: '#F0E6D3', fontSize: '1.1rem', fontWeight: 600 }}>
                     Build your station library
                   </p>
                   <p className="text-xs mt-2" style={{ color: '#534840', fontFamily: 'var(--font-mono)' }}>
-                    Search for radio stations in the panel on the left, then drag them onto the schedule.
+                    Search for radio stations or add Spotify playlists in the panel on the left, then drag them onto the schedule.
                   </p>
                 </div>
               </div>
             ) : (
               <div className="flex-1 overflow-hidden p-4">
-                <ScheduleGrid stations={stations} />
+                <ScheduleGrid stations={stations} spotifyPlaylists={spotifyPlaylists} />
               </div>
             )}
           </main>
         </div>
 
-        {/* ── Mobile: no sidebar ── */}
+        {/* Mobile notice */}
         <div
           className="md:hidden flex-shrink-0 px-4 py-2 text-center text-[10px]"
           style={{ borderTop: '1px solid #2E2317', color: '#3A2F20', fontFamily: 'var(--font-mono)' }}
@@ -261,6 +272,20 @@ export function ScheduleManager() {
             ▶ {dragPlaylist.name} · {dragPlaylist.stationIds.length}h
           </div>
         )}
+        {dragSpotifyPlaylist && (
+          <div
+            className="px-3 py-1.5 rounded-lg text-xs font-medium shadow-2xl pointer-events-none flex items-center gap-2"
+            style={{
+              backgroundColor: `${SPOTIFY_GREEN}22`,
+              border: `1.5px solid ${SPOTIFY_GREEN}88`,
+              color: SPOTIFY_GREEN,
+              fontFamily: 'var(--font-mono)',
+              backdropFilter: 'blur(4px)',
+            }}
+          >
+            ♪ {dragSpotifyPlaylist.name}
+          </div>
+        )}
       </DragOverlay>
 
       {/* Settings */}
@@ -268,6 +293,7 @@ export function ScheduleManager() {
         <SettingsPanel
           settings={settings}
           stations={stations}
+          spotifyPlaylists={spotifyPlaylists}
           onUpdateSetting={updateSetting}
           onClose={() => setShowSettings(false)}
         />

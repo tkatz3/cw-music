@@ -4,6 +4,7 @@ import { db } from '../lib/firebase';
 
 export interface Settings {
   default_station: string;
+  default_type: 'somafm' | 'spotify';
   volume: number;
   is_paused: boolean;
   pin: string;
@@ -11,15 +12,20 @@ export interface Settings {
   // When follow_schedule is OFF, this station plays instead of whatever the schedule says.
   // null = no override (falls through to schedule / default station).
   manual_station_override: string | null;
+  spotify_refresh_token: string | null;
+  spotify_connected: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
   default_station: '',
+  default_type: 'somafm',
   volume: 70,
   is_paused: false,
   pin: '1315',
   follow_schedule: false,
   manual_station_override: null,
+  spotify_refresh_token: null,
+  spotify_connected: false,
 };
 
 export function useSettings() {

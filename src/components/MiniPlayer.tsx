@@ -121,7 +121,7 @@ export function MiniPlayer({
                 style={{
                   backgroundColor: '#1F1710',
                   border: '1px solid #3A2F20',
-                  minWidth: '180px',
+                  minWidth: '240px',
                   maxHeight: '320px',
                   overflowY: 'auto',
                   boxShadow: '0 8px 32px rgba(0,0,0,0.5)',

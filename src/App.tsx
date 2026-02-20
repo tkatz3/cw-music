@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { authReady } from './lib/firebase';
 import { ScheduleManager } from './pages/ScheduleManager';
 import { PlayerPage } from './pages/PlayerPage';
+import { SpotifyCallback } from './pages/SpotifyCallback';
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -24,6 +25,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<ScheduleManager />} />
         <Route path="/player" element={<PlayerPage />} />
+        <Route path="/callback" element={<SpotifyCallback />} />
       </Routes>
     </BrowserRouter>
   );

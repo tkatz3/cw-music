@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { DAY_SHORT, START_HOUR, END_HOUR, LATE_END_HOUR } from '../lib/schedule';
-import type { Station } from '../lib/stations';
+import type { Station, SpotifyPlaylistRecord } from '../lib/stations';
 import { TimeSlot } from './TimeSlot';
 import { useSchedule } from '../hooks/useSchedule';
 
 interface ScheduleGridProps {
   stations: Station[];
+  spotifyPlaylists: SpotifyPlaylistRecord[];
 }
 
 function formatHour(hour: number) {
@@ -19,17 +20,20 @@ function getTodayIndex(): number {
   return (new Date().getDay() + 6) % 7;
 }
 
-// --- Resize drag state ---
 interface ResizeDrag {
   day: number;
-  stationId: string;
-  runStart: number;   // first display-hour of the run
-  runEnd: number;     // last display-hour of the run (at drag start)
-  previewEnd: number; // where we're currently previewing to
+  blockKey: string;        // station_id or spotify_uri
+  blockType: 'somafm' | 'spotify';
+  stationId?: string;      // for somafm resize
+  spotifyUri?: string;     // for spotify resize
+  spotifyName?: string;    // for spotify resize
+  runStart: number;
+  runEnd: number;
+  previewEnd: number;
 }
 
-export function ScheduleGrid({ stations }: ScheduleGridProps) {
-  const { assignStation, clearSlot, getSlotStation } = useSchedule();
+export function ScheduleGrid({ stations, spotifyPlaylists }: ScheduleGridProps) {
+  const { assignStation, assignSpotifyPlaylist, clearSlot, getSlotStation, getSlotBlock } = useSchedule();
   const [showLate, setShowLate] = useState(false);
   const [resizeDrag, setResizeDrag] = useState<ResizeDrag | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -40,28 +44,25 @@ export function ScheduleGrid({ stations }: ScheduleGridProps) {
     (_, i) => START_HOUR + i
   );
 
-  // Find the start and end display-hours of the run containing (day, hour)
   function getRunBounds(day: number, hour: number): { start: number; end: number } | null {
-    const stationId = getSlotStation(day, hour);
-    if (!stationId) return null;
+    const key = getSlotStation(day, hour);
+    if (!key) return null;
 
     let start = hour;
-    while (start > START_HOUR && getSlotStation(day, start - 1) === stationId) start--;
+    while (start > START_HOUR && getSlotStation(day, start - 1) === key) start--;
 
     let end = hour;
     const maxHour = LATE_END_HOUR - 1;
-    while (end < maxHour && getSlotStation(day, end + 1) === stationId) end++;
+    while (end < maxHour && getSlotStation(day, end + 1) === key) end++;
 
     return { start, end };
   }
 
-  // Pointer-move handler: find which hour is under the cursor using data attributes
   useEffect(() => {
     if (!resizeDrag) return;
 
     function onPointerMove(e: PointerEvent) {
       if (!resizeDrag) return;
-      // Find the slot element under the cursor
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const slotEl = el?.closest('[data-slot-hour]');
       if (!slotEl) return;
@@ -69,7 +70,6 @@ export function ScheduleGrid({ stations }: ScheduleGridProps) {
       const slotDay = parseInt(slotEl.getAttribute('data-slot-day') ?? '-1');
       const slotHour = parseInt(slotEl.getAttribute('data-slot-hour') ?? '-1');
 
-      // Only extend within the same day column, at or beyond the run start
       if (slotDay !== resizeDrag.day || slotHour < resizeDrag.runStart) return;
 
       setResizeDrag((prev) => prev ? { ...prev, previewEnd: slotHour } : null);
@@ -77,18 +77,20 @@ export function ScheduleGrid({ stations }: ScheduleGridProps) {
 
     async function onPointerUp() {
       if (!resizeDrag) return;
-      const { day, stationId, runStart, runEnd, previewEnd } = resizeDrag;
+      const { day, blockType, stationId, spotifyUri, spotifyName, runStart, runEnd, previewEnd } = resizeDrag;
       setResizeDrag(null);
 
-      if (previewEnd === runEnd) return; // no change
+      if (previewEnd === runEnd) return;
 
       if (previewEnd > runEnd) {
-        // Extending — fill new hours
         for (let h = runEnd + 1; h <= previewEnd; h++) {
-          await assignStation(day, h, stationId);
+          if (blockType === 'spotify' && spotifyUri && spotifyName) {
+            await assignSpotifyPlaylist(day, h, spotifyUri, spotifyName);
+          } else if (stationId) {
+            await assignStation(day, h, stationId);
+          }
         }
       } else {
-        // Shrinking — clear removed hours (keep at least the run start)
         const newEnd = Math.max(previewEnd, runStart);
         for (let h = newEnd + 1; h <= runEnd; h++) {
           await clearSlot(day, h);
@@ -107,44 +109,47 @@ export function ScheduleGrid({ stations }: ScheduleGridProps) {
   function handleResizeStart(e: React.PointerEvent, day: number, hour: number) {
     e.stopPropagation();
     e.preventDefault();
-    const stationId = getSlotStation(day, hour);
-    if (!stationId) return;
+    const blockKey = getSlotStation(day, hour);
+    if (!blockKey) return;
+    const block = getSlotBlock(day, hour);
+    if (!block) return;
     const bounds = getRunBounds(day, hour);
     if (!bounds) return;
+
+    const blockType = block.type ?? 'somafm';
     setResizeDrag({
       day,
-      stationId,
+      blockKey,
+      blockType,
+      stationId: blockType === 'somafm' ? block.station_id : undefined,
+      spotifyUri: blockType === 'spotify' ? block.spotify_uri : undefined,
+      spotifyName: blockType === 'spotify' ? block.spotify_name : undefined,
       runStart: bounds.start,
       runEnd: bounds.end,
       previewEnd: bounds.end,
     });
   }
 
-  // Determine if a slot should show a resize handle (last in its run, within visible hours)
   function isRunEnd(day: number, hour: number): boolean {
-    const stationId = getSlotStation(day, hour);
-    if (!stationId) return false;
+    const key = getSlotStation(day, hour);
+    if (!key) return false;
     const nextHour = hour + 1;
     if (nextHour > (showLate ? LATE_END_HOUR - 1 : END_HOUR - 1)) return true;
-    return getSlotStation(day, nextHour) !== stationId;
+    return getSlotStation(day, nextHour) !== key;
   }
 
-  // Preview status for a given cell during resize
   function getPreviewStatus(day: number, hour: number): 'adding' | 'removing' | null {
     if (!resizeDrag || day !== resizeDrag.day) return null;
     const { runEnd, previewEnd } = resizeDrag;
 
     if (previewEnd > runEnd) {
-      // Extending: hours from runEnd+1 to previewEnd are being "added"
       if (hour > runEnd && hour <= previewEnd) return 'adding';
     } else if (previewEnd < runEnd) {
-      // Shrinking: hours from previewEnd+1 to runEnd are being "removed"
       if (hour > previewEnd && hour <= runEnd) return 'removing';
     }
     return null;
   }
 
-  // Is this the last hour of the visual run end during preview (for showing handle)
   function isPreviewRunEnd(day: number, hour: number): boolean {
     if (resizeDrag && day === resizeDrag.day) {
       return hour === resizeDrag.previewEnd;
@@ -188,19 +193,16 @@ export function ScheduleGrid({ stations }: ScheduleGridProps) {
             const isMidnight = hour === 24;
             return (
               <>
-                {/* Midnight divider */}
                 {isMidnight && (
-                  <>
-                    <div
-                      key="midnight-label"
-                      className="col-span-8 flex items-center gap-2 px-3 py-1"
-                      style={{ borderTop: '1px dashed #2E2317', marginTop: '2px' }}
-                    >
-                      <span style={{ color: '#3A2F20', fontSize: '9px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                        past midnight ↓ next day
-                      </span>
-                    </div>
-                  </>
+                  <div
+                    key="midnight-label"
+                    className="col-span-8 flex items-center gap-2 px-3 py-1"
+                    style={{ borderTop: '1px dashed #2E2317', marginTop: '2px' }}
+                  >
+                    <span style={{ color: '#3A2F20', fontSize: '9px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      past midnight ↓ next day
+                    </span>
+                  </div>
                 )}
 
                 <div
@@ -214,16 +216,18 @@ export function ScheduleGrid({ stations }: ScheduleGridProps) {
                 </div>
                 {Array.from({ length: 7 }, (_, day) => {
                   const previewStatus = getPreviewStatus(day, hour);
+                  const block = getSlotBlock(day, hour);
                   const showHandle = isPreviewRunEnd(day, hour) || (resizeDrag?.day === day && hour === resizeDrag.previewEnd);
                   return (
                     <div key={`slot-${day}-${hour}`} className="p-[2px]">
                       <TimeSlot
                         day={day}
                         hour={hour}
-                        stationId={getSlotStation(day, hour)}
+                        block={block}
                         stations={stations}
+                        spotifyPlaylists={spotifyPlaylists}
                         previewStatus={previewStatus}
-                        showResizeHandle={showHandle && !!getSlotStation(day, hour)}
+                        showResizeHandle={showHandle && !!block}
                         onClear={() => !resizeDrag && clearSlot(day, hour)}
                         onResizeStart={(e) => handleResizeStart(e, day, hour)}
                       />

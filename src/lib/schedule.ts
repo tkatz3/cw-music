@@ -1,4 +1,4 @@
-import type { Station } from './stations';
+import type { Station, SpotifyPlaylistRecord } from './stations';
 
 export interface ScheduleBlock {
   id: string;
@@ -7,8 +7,15 @@ export interface ScheduleBlock {
   start_minute: number;
   end_hour: number;
   end_minute: number;
-  station_id: string;
+  type?: 'somafm' | 'spotify'; // undefined = somafm (backward compat)
+  station_id?: string;   // used when type is 'somafm'
+  spotify_uri?: string;  // used when type is 'spotify'
+  spotify_name?: string; // used when type is 'spotify'
 }
+
+export type PlaybackSource =
+  | { type: 'somafm'; station: Station }
+  | { type: 'spotify'; uri: string; name: string };
 
 export function getCurrentStation(
   scheduleBlocks: ScheduleBlock[],
@@ -33,6 +40,45 @@ export function getCurrentStation(
     return stations.find((s) => s.id === currentBlock.station_id) ?? stations.find((s) => s.id === defaultStationId) ?? stations[0] ?? null;
   }
   return stations.find((s) => s.id === defaultStationId) ?? stations[0] ?? null;
+}
+
+export function getCurrentPlayback(
+  blocks: ScheduleBlock[],
+  stations: Station[],
+  spotifyPlaylists: SpotifyPlaylistRecord[],
+  defaultStationId: string,
+  defaultType: 'somafm' | 'spotify' = 'somafm',
+): PlaybackSource | null {
+  const now = new Date();
+  const dayOfWeek = (now.getDay() + 6) % 7;
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+
+  const currentBlock = blocks.find(
+    (block) =>
+      block.day_of_week === dayOfWeek &&
+      (block.start_hour < currentHour ||
+        (block.start_hour === currentHour && block.start_minute <= currentMinute)) &&
+      (block.end_hour > currentHour ||
+        (block.end_hour === currentHour && block.end_minute > currentMinute))
+  );
+
+  if (currentBlock) {
+    const blockType = currentBlock.type ?? 'somafm';
+    if (blockType === 'spotify' && currentBlock.spotify_uri) {
+      return { type: 'spotify', uri: currentBlock.spotify_uri, name: currentBlock.spotify_name ?? 'Spotify Playlist' };
+    }
+    const station = stations.find((s) => s.id === currentBlock.station_id);
+    if (station) return { type: 'somafm', station };
+  }
+
+  // Fall through to default
+  if (defaultType === 'spotify') {
+    const defaultPlaylist = spotifyPlaylists.find((p) => p.id === defaultStationId);
+    if (defaultPlaylist) return { type: 'spotify', uri: defaultPlaylist.uri, name: defaultPlaylist.name };
+  }
+  const station = stations.find((s) => s.id === defaultStationId) ?? stations[0];
+  return station ? { type: 'somafm', station } : null;
 }
 
 export function getNextStation(

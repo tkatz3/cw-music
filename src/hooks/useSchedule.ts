@@ -55,7 +55,28 @@ export function useSchedule() {
       start_minute: 0,
       end_hour: h + 1,
       end_minute: 0,
+      type: 'somafm',
       station_id: stationId,
+    });
+  }
+
+  async function assignSpotifyPlaylist(day: number, hour: number, uri: string, name: string) {
+    const { day: d, hour: h } = resolveSlot(day, hour);
+    const existing = blocksRef.current.filter(
+      (b) => b.day_of_week === d && b.start_hour === h && b.start_minute === 0
+    );
+    for (const block of existing) {
+      await remove(ref(db, `schedule_blocks/${block.id}`));
+    }
+    await push(ref(db, 'schedule_blocks'), {
+      day_of_week: d,
+      start_hour: h,
+      start_minute: 0,
+      end_hour: h + 1,
+      end_minute: 0,
+      type: 'spotify',
+      spotify_uri: uri,
+      spotify_name: name,
     });
   }
 
@@ -85,13 +106,24 @@ export function useSchedule() {
     }
   }
 
+  // Returns station_id for SomaFM blocks, spotify_uri for Spotify blocks.
+  // Used as a run-key for resize grouping.
   function getSlotStation(day: number, hour: number): string | null {
     const { day: d, hour: h } = resolveSlot(day, hour);
     const block = blocksRef.current.find(
       (b) => b.day_of_week === d && b.start_hour === h && b.start_minute === 0
     );
-    return block?.station_id ?? null;
+    if (!block) return null;
+    if ((block.type ?? 'somafm') === 'spotify') return block.spotify_uri ?? null;
+    return block.station_id ?? null;
   }
 
-  return { blocks, loading, error, assignStation, assignPlaylist, clearSlot, clearDay, getSlotStation };
+  function getSlotBlock(day: number, hour: number): ScheduleBlock | null {
+    const { day: d, hour: h } = resolveSlot(day, hour);
+    return blocksRef.current.find(
+      (b) => b.day_of_week === d && b.start_hour === h && b.start_minute === 0
+    ) ?? null;
+  }
+
+  return { blocks, loading, error, assignStation, assignSpotifyPlaylist, assignPlaylist, clearSlot, clearDay, getSlotStation, getSlotBlock };
 }

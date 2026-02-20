@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import type { Station } from '../lib/stations';
+import type { Station, SpotifyPlaylistRecord } from '../lib/stations';
 import type { Settings } from '../hooks/useSettings';
+import { SpotifyConnect } from './SpotifyConnect';
 
 interface SettingsPanelProps {
   settings: Settings;
   stations: Station[];
+  spotifyPlaylists: SpotifyPlaylistRecord[];
   onUpdateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => Promise<void>;
   onClose: () => void;
 }
@@ -21,7 +23,7 @@ const labelStyle = {
   display: 'block', marginBottom: '6px',
 };
 
-export function SettingsPanel({ settings, stations, onUpdateSetting, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ settings, stations, spotifyPlaylists, onUpdateSetting, onClose }: SettingsPanelProps) {
   const [changingPin, setChangingPin] = useState(false);
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
@@ -40,6 +42,13 @@ export function SettingsPanel({ settings, stations, onUpdateSetting, onClose }: 
     setChangingPin(false);
   }
 
+  const hasDefaultOptions = stations.length > 0 || spotifyPlaylists.length > 0;
+
+  async function handleDefaultChange(value: string, type: 'somafm' | 'spotify') {
+    await onUpdateSetting('default_station', value);
+    await onUpdateSetting('default_type', type);
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -47,8 +56,8 @@ export function SettingsPanel({ settings, stations, onUpdateSetting, onClose }: 
       onClick={onClose}
     >
       <div
-        className="w-full max-w-sm rounded-xl p-6 flex flex-col gap-6 shadow-2xl animate-slide-up"
-        style={{ backgroundColor: '#1F1710', border: '1px solid #3A2F20' }}
+        className="w-full max-w-sm rounded-xl p-6 flex flex-col gap-6 shadow-2xl animate-slide-up overflow-y-auto"
+        style={{ backgroundColor: '#1F1710', border: '1px solid #3A2F20', maxHeight: '90vh' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -65,30 +74,52 @@ export function SettingsPanel({ settings, stations, onUpdateSetting, onClose }: 
           </button>
         </div>
 
-        {/* Default Station */}
+        {/* Spotify Connection */}
         <div>
-          <label style={labelStyle}>Default station</label>
-          {stations.length === 0 ? (
+          <label style={labelStyle}>Spotify</label>
+          <SpotifyConnect settings={settings} />
+        </div>
+
+        {/* Default Fallback */}
+        <div>
+          <label style={labelStyle}>Default fallback</label>
+          {!hasDefaultOptions ? (
             <p style={{ color: '#534840', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
-              No stations in library yet.
+              No stations or playlists in library yet.
             </p>
           ) : (
             <select
-              value={settings.default_station}
-              onChange={(e) => onUpdateSetting('default_station', e.target.value)}
+              value={`${settings.default_type}::${settings.default_station}`}
+              onChange={(e) => {
+                const [type, id] = e.target.value.split('::') as ['somafm' | 'spotify', string];
+                handleDefaultChange(id, type);
+              }}
               style={{ ...inputStyle, cursor: 'pointer' }}
               onFocus={(e) => { e.target.style.borderColor = '#E4A530'; }}
               onBlur={(e) => { e.target.style.borderColor = '#2E2317'; }}
             >
-              {stations.map((s) => (
-                <option key={s.id} value={s.id} style={{ backgroundColor: '#1F1710' }}>
-                  {s.name}
-                </option>
-              ))}
+              {stations.length > 0 && (
+                <optgroup label="Radio Stations" style={{ backgroundColor: '#1F1710' }}>
+                  {stations.map((s) => (
+                    <option key={s.id} value={`somafm::${s.id}`} style={{ backgroundColor: '#1F1710' }}>
+                      {s.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {spotifyPlaylists.length > 0 && (
+                <optgroup label="Spotify Playlists" style={{ backgroundColor: '#1F1710' }}>
+                  {spotifyPlaylists.map((p) => (
+                    <option key={p.id} value={`spotify::${p.id}`} style={{ backgroundColor: '#1F1710' }}>
+                      ♪ {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           )}
           <p style={{ color: '#3A2F20', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', marginTop: '4px' }}>
-            Plays when no station is scheduled
+            Plays when nothing is scheduled
           </p>
         </div>
 

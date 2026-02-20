@@ -2,28 +2,38 @@ import { useState } from 'react';
 import { StationCard } from './StationCard';
 import { PlaylistCard } from './PlaylistCard';
 import { PlaylistEditor } from './PlaylistEditor';
+import { SpotifyPlaylistCard } from './SpotifyPlaylistCard';
+import { AddPlaylistForm } from './AddPlaylistForm';
 import { useRadioBrowser } from '../hooks/useRadioBrowser';
-import type { Station, Playlist } from '../lib/stations';
+import type { Station, Playlist, SpotifyPlaylistRecord } from '../lib/stations';
 import type { RadioBrowserStation } from '../hooks/useStations';
+
+const SPOTIFY_GREEN = '#1DB954';
 
 interface StationSidebarProps {
   stations: Station[];
   playlists: Playlist[];
+  spotifyPlaylists: SpotifyPlaylistRecord[];
+  spotifyConnected: boolean;
   onAddStation: (rb: RadioBrowserStation) => void;
   onRemoveStation: (id: string) => void;
   onCreatePlaylist: (name: string, stationIds: string[]) => Promise<unknown>;
   onUpdatePlaylist: (id: string, updates: { name?: string; stationIds?: string[] }) => Promise<void>;
   onDeletePlaylist: (id: string) => Promise<void>;
+  onAddSpotifyPlaylist: (playlist: SpotifyPlaylistRecord) => Promise<void>;
+  onRemoveSpotifyPlaylist: (id: string) => Promise<void>;
 }
 
 export function StationSidebar({
-  stations, playlists,
+  stations, playlists, spotifyPlaylists, spotifyConnected,
   onAddStation, onRemoveStation,
   onCreatePlaylist, onUpdatePlaylist, onDeletePlaylist,
+  onAddSpotifyPlaylist, onRemoveSpotifyPlaylist,
 }: StationSidebarProps) {
   const [query, setQuery] = useState('');
   const { results, searching, search, clearResults } = useRadioBrowser();
   const [editingPlaylist, setEditingPlaylist] = useState<Playlist | 'new' | null>(null);
+  const [showAddSpotify, setShowAddSpotify] = useState(false);
 
   const savedIds = new Set(stations.map((s) => s.id));
   const showSearch = query.trim().length > 0;
@@ -132,10 +142,7 @@ export function StationSidebar({
               </div>
 
               {stations.length === 0 ? (
-                <div
-                  className="rounded-lg p-3 text-center"
-                  style={{ border: '1px dashed #2E2317' }}
-                >
+                <div className="rounded-lg p-3 text-center" style={{ border: '1px dashed #2E2317' }}>
                   <p className="text-[11px] leading-relaxed" style={{ color: '#534840', fontFamily: 'var(--font-mono)' }}>
                     Search above to find<br />stations to add
                   </p>
@@ -153,7 +160,7 @@ export function StationSidebar({
               )}
             </div>
 
-            {/* ── Playlists ── */}
+            {/* ── Station Playlists ── */}
             <div>
               <div className="flex items-center justify-between mb-2 px-0.5">
                 <span className="text-[10px] uppercase tracking-widest" style={{ color: '#534840', fontFamily: 'var(--font-mono)' }}>
@@ -173,10 +180,7 @@ export function StationSidebar({
               </div>
 
               {playlists.length === 0 ? (
-                <div
-                  className="rounded-lg p-3 text-center"
-                  style={{ border: '1px dashed #2E2317' }}
-                >
+                <div className="rounded-lg p-3 text-center" style={{ border: '1px dashed #2E2317' }}>
                   <p className="text-[11px] leading-relaxed" style={{ color: '#534840', fontFamily: 'var(--font-mono)' }}>
                     {stations.length === 0
                       ? 'Add stations first'
@@ -196,11 +200,55 @@ export function StationSidebar({
                 </div>
               )}
             </div>
+
+            {/* ── Spotify Playlists ── */}
+            <div>
+              <div className="flex items-center justify-between mb-2 px-0.5">
+                <span className="text-[10px] uppercase tracking-widest" style={{ color: SPOTIFY_GREEN, fontFamily: 'var(--font-mono)', opacity: 0.8 }}>
+                  Spotify
+                </span>
+                {spotifyConnected && (
+                  <button
+                    onClick={() => setShowAddSpotify(true)}
+                    className="text-[10px] transition-colors"
+                    style={{ color: SPOTIFY_GREEN, fontFamily: 'var(--font-mono)', opacity: 0.7 }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.7'; }}
+                  >
+                    + add
+                  </button>
+                )}
+              </div>
+
+              {!spotifyConnected ? (
+                <div className="rounded-lg p-3 text-center" style={{ border: `1px dashed ${SPOTIFY_GREEN}33` }}>
+                  <p className="text-[11px] leading-relaxed" style={{ color: '#534840', fontFamily: 'var(--font-mono)' }}>
+                    Connect Spotify in Settings to add playlists
+                  </p>
+                </div>
+              ) : spotifyPlaylists.length === 0 ? (
+                <div className="rounded-lg p-3 text-center" style={{ border: `1px dashed ${SPOTIFY_GREEN}33` }}>
+                  <p className="text-[11px] leading-relaxed" style={{ color: '#534840', fontFamily: 'var(--font-mono)' }}>
+                    Add a Spotify playlist to drag it onto the schedule
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {spotifyPlaylists.map((pl) => (
+                    <SpotifyPlaylistCard
+                      key={pl.id}
+                      playlist={pl}
+                      onRemove={() => onRemoveSpotifyPlaylist(pl.id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </>
         )}
       </div>
 
-      {/* Playlist editor modal */}
+      {/* Station playlist editor modal */}
       {editingPlaylist && (
         <PlaylistEditor
           playlist={editingPlaylist === 'new' ? undefined : editingPlaylist}
@@ -216,6 +264,14 @@ export function StationSidebar({
             await onDeletePlaylist((editingPlaylist as Playlist).id);
           } : undefined}
           onClose={() => setEditingPlaylist(null)}
+        />
+      )}
+
+      {/* Add Spotify playlist modal */}
+      {showAddSpotify && (
+        <AddPlaylistForm
+          onAdd={onAddSpotifyPlaylist}
+          onClose={() => setShowAddSpotify(false)}
         />
       )}
     </aside>
