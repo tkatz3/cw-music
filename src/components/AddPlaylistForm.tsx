@@ -43,7 +43,7 @@ async function getFreshToken(): Promise<string | null> {
   return getValidAccessToken(getFirebaseRefreshToken, onNewTokens);
 }
 
-/** Call an API fn with full retry: handles token fetch failures AND API call failures. */
+/** Call an API fn with token-rotation retry. Never retries on 429 (rate limit). */
 async function withRetry<T>(fn: (token: string) => Promise<T>): Promise<T | null> {
   // Step 1: get token (may fail if refresh token was just rotated by another tab)
   let token: string | null;
@@ -55,17 +55,19 @@ async function withRetry<T>(fn: (token: string) => Promise<T>): Promise<T | null
   }
   if (!token) return null;
 
-  // Step 2: call the API (may fail with 400/401 if token was stale despite not throwing)
+  // Step 2: call API; only retry on auth errors (401) — not 429 (rate limit)
   try {
     return await fn(token);
   } catch (apiErr) {
+    const status = (apiErr as { status?: number }).status;
+    if (status === 429) throw apiErr; // never retry rate-limit — it makes things worse
     console.warn('[Spotify] API call failed — retrying with fresh token:', apiErr instanceof Error ? apiErr.message : apiErr);
     try {
       token = await getFreshToken();
       if (!token) return null;
       return await fn(token);
     } catch (retryErr) {
-      throw retryErr; // surface the most recent error
+      throw retryErr;
     }
   }
 }
@@ -99,15 +101,21 @@ export function AddPlaylistForm({ onAdd, onClose }: AddPlaylistFormProps) {
         if (items === null) { setError('Spotify not connected — connect it in Settings first.'); setLoadingLibrary(false); return; }
         if (cancelled) return;
         setMyPlaylists(items);
-        // Fetch accurate track counts in background
-        items.forEach(async (pl) => {
-          try {
-            const details = await withRetry((tok) => fetchPlaylistDetails(pl.id, tok));
-            if (details && !cancelled) setDetailsMap((prev) => new Map(prev).set(pl.id, details));
-          } catch {}
-        });
+        // Fetch details sequentially to avoid Spotify 429 rate limits
+        (async () => {
+          for (const pl of items) {
+            if (cancelled) break;
+            try {
+              const details = await withRetry((tok) => fetchPlaylistDetails(pl.id, tok));
+              if (details && !cancelled) setDetailsMap((prev) => new Map(prev).set(pl.id, details));
+            } catch {}
+            await new Promise((r) => setTimeout(r, 120)); // ~8 req/s, well within Spotify limits
+          }
+        })();
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load playlists');
+        const msg = err instanceof Error ? err.message : 'Failed to load playlists';
+        const is429 = (err as { status?: number }).status === 429;
+        if (!cancelled) setError(is429 ? 'Spotify rate limit hit — close other tabs and try again' : msg);
       } finally {
         if (!cancelled) setLoadingLibrary(false);
       }
@@ -130,15 +138,19 @@ export function AddPlaylistForm({ onAdd, onClose }: AddPlaylistFormProps) {
         if (results === null) { setError('Spotify not connected.'); setSearching(false); return; }
         setSearchResults(results);
         setDetailsMap(new Map()); // reset while details load
-        // Fetch details (follower + accurate track count) in background
-        results.forEach(async (pl) => {
-          try {
-            const details = await withRetry((tok) => fetchPlaylistDetails(pl.id, tok));
-            if (details) setDetailsMap((prev) => new Map(prev).set(pl.id, details));
-          } catch {}
-        });
+        // Fetch details sequentially to avoid Spotify 429 rate limits
+        (async () => {
+          for (const pl of results) {
+            try {
+              const details = await withRetry((tok) => fetchPlaylistDetails(pl.id, tok));
+              if (details) setDetailsMap((prev) => new Map(prev).set(pl.id, details));
+            } catch {}
+            await new Promise((r) => setTimeout(r, 120));
+          }
+        })();
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Search failed');
+        const is429 = (err as { status?: number }).status === 429;
+        setError(is429 ? 'Spotify rate limit hit — wait a moment and try again' : (err instanceof Error ? err.message : 'Search failed'));
       } finally {
         setSearching(false);
       }

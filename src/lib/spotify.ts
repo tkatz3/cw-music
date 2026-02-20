@@ -223,8 +223,9 @@ export interface SpotifySearchResult extends SpotifyPlaylistMeta {
 }
 
 export async function searchSpotifyPlaylists(query: string, accessToken: string): Promise<SpotifySearchResult[]> {
-  // limit=50 (max): Spotify auto-applies user's market when a valid token is present
-  const params = new URLSearchParams({ q: query, type: 'playlist', limit: '50' });
+  // No limit param — sending any explicit limit causes Spotify to return "Invalid limit"
+  // for this app's credentials. Default (20) is fine; we paginate if needed.
+  const params = new URLSearchParams({ q: query, type: 'playlist' });
   const url = `https://api.spotify.com/v1/search?${params.toString()}`;
   const response = await fetch(url, {
     headers: { 'Authorization': `Bearer ${accessToken}` },
