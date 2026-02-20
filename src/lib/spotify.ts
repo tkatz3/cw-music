@@ -143,6 +143,11 @@ export function setCachedTokens(tokens: SpotifyTokens) {
   cachedTokens = tokens;
 }
 
+export function clearCachedTokens() {
+  cachedTokens = null;
+  refreshPromise = null;
+}
+
 export async function getValidAccessToken(
   getRefreshToken: () => Promise<string | null>,
   onNewTokens: (tokens: SpotifyTokens) => Promise<void>
@@ -208,6 +213,99 @@ export async function fetchPlaylistMeta(playlistId: string, accessToken: string)
     image_url: data.images?.[0]?.url ?? '',
     track_count: data.tracks?.total ?? 0,
   };
+}
+
+// ── Search ────────────────────────────────────────────────────
+
+export interface SpotifySearchResult extends SpotifyPlaylistMeta {
+  owner_name: string;
+  follower_count?: number; // populated lazily
+}
+
+export async function searchSpotifyPlaylists(query: string, accessToken: string): Promise<SpotifySearchResult[]> {
+  // limit=50 (max): Spotify auto-applies user's market when a valid token is present
+  const params = new URLSearchParams({ q: query, type: 'playlist', limit: '50' });
+  const url = `https://api.spotify.com/v1/search?${params.toString()}`;
+  const response = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    let message = 'Search failed';
+    try { message = (JSON.parse(body) as { error?: { message?: string } }).error?.message ?? message; } catch {}
+    console.error('[Spotify search] HTTP', response.status, body);
+    const err = Object.assign(new Error(message), { status: response.status });
+    throw err;
+  }
+
+  const data = await response.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const items = (data.playlists?.items ?? []).filter(Boolean).map((item: any) => ({
+    id: item.id,
+    name: item.name,
+    uri: item.uri,
+    image_url: item.images?.[0]?.url ?? '',
+    track_count: item.tracks?.total ?? 0,
+    owner_name: item.owner?.display_name ?? item.owner?.id ?? 'Unknown',
+  }));
+  console.log(`[Spotify search] "${query}" → ${items.length} results (total: ${data.playlists?.total})`);
+  return items;
+}
+
+/** Returns follower count and authoritative track count for a playlist. */
+export async function fetchPlaylistDetails(
+  playlistId: string,
+  accessToken: string
+): Promise<{ follower_count: number; track_count: number }> {
+  const response = await fetch(
+    `https://api.spotify.com/v1/playlists/${playlistId}?fields=followers.total,tracks.total`,
+    { headers: { 'Authorization': `Bearer ${accessToken}` } }
+  );
+  if (!response.ok) {
+    if (response.status === 401) throw Object.assign(new Error('Unauthorized'), { status: 401 });
+    return { follower_count: 0, track_count: 0 };
+  }
+  const data = await response.json();
+  return {
+    follower_count: data.followers?.total ?? 0,
+    track_count: data.tracks?.total ?? 0,
+  };
+}
+
+// ── User playlists ────────────────────────────────────────────
+
+export async function fetchUserPlaylists(accessToken: string): Promise<SpotifyPlaylistMeta[]> {
+  const results: SpotifyPlaylistMeta[] = [];
+  let url: string | null = 'https://api.spotify.com/v1/me/playlists?limit=50';
+
+  while (url) {
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      let message = 'Failed to fetch playlists';
+      try { message = (JSON.parse(body) as { error?: { message?: string } }).error?.message ?? message; } catch {}
+      console.error('[Spotify /me/playlists] HTTP', response.status, body);
+      throw Object.assign(new Error(message), { status: response.status });
+    }
+
+    const data = await response.json();
+    for (const item of data.items ?? []) {
+      results.push({
+        id: item.id,
+        name: item.name,
+        uri: item.uri,
+        image_url: item.images?.[0]?.url ?? '',
+        track_count: item.tracks?.total ?? 0,
+      });
+    }
+    url = data.next ?? null;
+  }
+
+  return results;
 }
 
 // ── Playback control ──────────────────────────────────────────
