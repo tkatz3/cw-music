@@ -240,8 +240,10 @@ export async function searchSpotifyPlaylists(query: string, accessToken: string)
   }
 
   const data = await response.json();
+  const rawItems = data.playlists?.items ?? [];
+  const nullCount = rawItems.filter((x: unknown) => !x).length;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const items = (data.playlists?.items ?? []).filter(Boolean).map((item: any) => ({
+  const items = rawItems.filter(Boolean).map((item: any) => ({
     id: item.id,
     name: item.name,
     uri: item.uri,
@@ -249,7 +251,7 @@ export async function searchSpotifyPlaylists(query: string, accessToken: string)
     track_count: item.tracks?.total ?? 0,
     owner_name: item.owner?.display_name ?? item.owner?.id ?? 'Unknown',
   }));
-  console.log(`[Spotify search] "${query}" → ${items.length} results (total: ${data.playlists?.total})`);
+  console.log(`[Spotify search] "${query}" → ${items.length} shown (${nullCount} null items filtered, total in Spotify: ${data.playlists?.total})`);
   return items;
 }
 
