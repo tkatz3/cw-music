@@ -7,7 +7,6 @@ import {
   fetchPlaylistDetails,
   getValidAccessToken,
   setCachedTokens,
-  clearCachedTokens,
   type SpotifyPlaylistMeta,
   type SpotifySearchResult,
   type SpotifyTokens,
@@ -30,52 +29,8 @@ async function onNewTokens(tokens: SpotifyTokens): Promise<void> {
   setCachedTokens(tokens);
 }
 
-/** Get a valid access token. */
 async function getToken(): Promise<string | null> {
   return getValidAccessToken(getFirebaseRefreshToken, onNewTokens);
-}
-
-/** Get a fresh token, bypassing the in-memory cache (use after a 401). */
-async function getFreshToken(): Promise<string | null> {
-  clearCachedTokens();
-  // Give Firebase a moment to settle if another tab just rotated the refresh token
-  await new Promise((r) => setTimeout(r, 500));
-  return getValidAccessToken(getFirebaseRefreshToken, onNewTokens);
-}
-
-/** Call an API fn. On 429, waits and retries once. On auth errors, refreshes token and retries. */
-async function withRetry<T>(fn: (token: string) => Promise<T>): Promise<T | null> {
-  // Step 1: get token (may fail if refresh token was just rotated by another tab)
-  let token: string | null;
-  try {
-    token = await getToken();
-  } catch (tokenErr) {
-    console.warn('[Spotify] Token fetch failed — retrying fresh:', tokenErr instanceof Error ? tokenErr.message : tokenErr);
-    token = await getFreshToken();
-  }
-  if (!token) return null;
-
-  // Step 2: call API
-  try {
-    return await fn(token);
-  } catch (apiErr) {
-    const status = (apiErr as { status?: number }).status;
-    if (status === 429) {
-      // Rate limited — wait 2s then retry once (SDK may have calmed down)
-      console.warn('[Spotify] 429 rate limit — waiting 2s before retry');
-      await new Promise((r) => setTimeout(r, 2000));
-      return fn(token!);
-    }
-    // Auth error — refresh token and retry
-    console.warn('[Spotify] API call failed — retrying with fresh token:', apiErr instanceof Error ? apiErr.message : apiErr);
-    try {
-      token = await getFreshToken();
-      if (!token) return null;
-      return await fn(token);
-    } catch (retryErr) {
-      throw retryErr;
-    }
-  }
 }
 
 function formatFollowers(n: number): string {
@@ -103,25 +58,26 @@ export function AddPlaylistForm({ onAdd, onClose }: AddPlaylistFormProps) {
     let cancelled = false;
     async function load() {
       try {
-        const items = await withRetry((tok) => fetchUserPlaylists(tok));
-        if (items === null) { setError('Spotify not connected — connect it in Settings first.'); setLoadingLibrary(false); return; }
+        const token = await getToken();
+        if (!token) { setError('Spotify not connected — connect it in Settings first.'); setLoadingLibrary(false); return; }
+        const items = await fetchUserPlaylists(token);
         if (cancelled) return;
         setMyPlaylists(items);
-        // Fetch details sequentially to avoid Spotify 429 rate limits
+        // Fetch track counts in background (sequential to avoid rate limits)
         (async () => {
           for (const pl of items) {
             if (cancelled) break;
             try {
-              const details = await withRetry((tok) => fetchPlaylistDetails(pl.id, tok));
-              if (details && !cancelled) setDetailsMap((prev) => new Map(prev).set(pl.id, details));
+              const tok = await getToken();
+              if (!tok || cancelled) break;
+              const details = await fetchPlaylistDetails(pl.id, tok);
+              if (!cancelled) setDetailsMap((prev) => new Map(prev).set(pl.id, details));
             } catch {}
-            await new Promise((r) => setTimeout(r, 120)); // ~8 req/s, well within Spotify limits
+            await new Promise((r) => setTimeout(r, 150));
           }
         })();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to load playlists';
-        const is429 = (err as { status?: number }).status === 429;
-        if (!cancelled) setError(is429 ? 'Spotify is busy — please reopen this dialog in a moment' : msg);
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load playlists');
       } finally {
         if (!cancelled) setLoadingLibrary(false);
       }
@@ -140,23 +96,25 @@ export function AddPlaylistForm({ onAdd, onClose }: AddPlaylistFormProps) {
       setSearching(true);
       setError(null);
       try {
-        const results = await withRetry((tok) => searchSpotifyPlaylists(q, tok));
-        if (results === null) { setError('Spotify not connected.'); setSearching(false); return; }
+        const token = await getToken();
+        if (!token) { setError('Spotify not connected.'); setSearching(false); return; }
+        const results = await searchSpotifyPlaylists(q, token);
         setSearchResults(results);
-        setDetailsMap(new Map()); // reset while details load
-        // Fetch details sequentially to avoid Spotify 429 rate limits
+        setDetailsMap(new Map());
+        // Fetch details in background (sequential to avoid rate limits)
         (async () => {
           for (const pl of results) {
             try {
-              const details = await withRetry((tok) => fetchPlaylistDetails(pl.id, tok));
-              if (details) setDetailsMap((prev) => new Map(prev).set(pl.id, details));
+              const tok = await getToken();
+              if (!tok) break;
+              const details = await fetchPlaylistDetails(pl.id, tok);
+              setDetailsMap((prev) => new Map(prev).set(pl.id, details));
             } catch {}
-            await new Promise((r) => setTimeout(r, 120));
+            await new Promise((r) => setTimeout(r, 150));
           }
         })();
       } catch (err) {
-        const is429 = (err as { status?: number }).status === 429;
-        setError(is429 ? 'Spotify is busy — please try your search again in a moment' : (err instanceof Error ? err.message : 'Search failed'));
+        setError(err instanceof Error ? err.message : 'Search failed');
       } finally {
         setSearching(false);
       }
@@ -182,7 +140,6 @@ export function AddPlaylistForm({ onAdd, onClose }: AddPlaylistFormProps) {
         name: pl.name,
         uri: pl.uri,
         image_url: pl.image_url,
-        // Prefer authoritative track_count from full playlist details fetch
         track_count: details?.track_count ?? pl.track_count,
       };
       await onAdd(record);
