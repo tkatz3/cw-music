@@ -43,7 +43,7 @@ async function getFreshToken(): Promise<string | null> {
   return getValidAccessToken(getFirebaseRefreshToken, onNewTokens);
 }
 
-/** Call an API fn with token-rotation retry. Never retries on 429 (rate limit). */
+/** Call an API fn. On 429, waits and retries once. On auth errors, refreshes token and retries. */
 async function withRetry<T>(fn: (token: string) => Promise<T>): Promise<T | null> {
   // Step 1: get token (may fail if refresh token was just rotated by another tab)
   let token: string | null;
@@ -55,12 +55,18 @@ async function withRetry<T>(fn: (token: string) => Promise<T>): Promise<T | null
   }
   if (!token) return null;
 
-  // Step 2: call API; only retry on auth errors (401) — not 429 (rate limit)
+  // Step 2: call API
   try {
     return await fn(token);
   } catch (apiErr) {
     const status = (apiErr as { status?: number }).status;
-    if (status === 429) throw apiErr; // never retry rate-limit — it makes things worse
+    if (status === 429) {
+      // Rate limited — wait 2s then retry once (SDK may have calmed down)
+      console.warn('[Spotify] 429 rate limit — waiting 2s before retry');
+      await new Promise((r) => setTimeout(r, 2000));
+      return fn(token!);
+    }
+    // Auth error — refresh token and retry
     console.warn('[Spotify] API call failed — retrying with fresh token:', apiErr instanceof Error ? apiErr.message : apiErr);
     try {
       token = await getFreshToken();
@@ -115,7 +121,7 @@ export function AddPlaylistForm({ onAdd, onClose }: AddPlaylistFormProps) {
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Failed to load playlists';
         const is429 = (err as { status?: number }).status === 429;
-        if (!cancelled) setError(is429 ? 'Spotify rate limit hit — close other tabs and try again' : msg);
+        if (!cancelled) setError(is429 ? 'Spotify is busy — please reopen this dialog in a moment' : msg);
       } finally {
         if (!cancelled) setLoadingLibrary(false);
       }
@@ -150,7 +156,7 @@ export function AddPlaylistForm({ onAdd, onClose }: AddPlaylistFormProps) {
         })();
       } catch (err) {
         const is429 = (err as { status?: number }).status === 429;
-        setError(is429 ? 'Spotify rate limit hit — wait a moment and try again' : (err instanceof Error ? err.message : 'Search failed'));
+        setError(is429 ? 'Spotify is busy — please try your search again in a moment' : (err instanceof Error ? err.message : 'Search failed'));
       } finally {
         setSearching(false);
       }
